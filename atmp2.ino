@@ -562,7 +562,7 @@ void automatic_request_execution(){
        
        datain_counter=0;
       // NON BLOCKING SERIAL READING ( IT ACCEPTS INTERRUPTS, interrupts are active.  )
-     Serial.print("READ "); Serial.println(flag_reading_bms);
+      Serial.print("READ "); Serial.println(flag_reading_bms);
       unsigned long initial_time=millis();
       while (datain_counter < AMOUNT_LINES_READ_BMS && flag_reading_bms) {  //BLOCKING READ OF A LOOP OF DATA     
         Serial.println(datain_counter);
