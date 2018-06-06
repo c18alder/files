@@ -2,6 +2,7 @@
 //#include <Wire.h>
 //extern TwoWire Wire1;
 
+// #include <EEPROM.h>
 #include <LiquidCrystal_I2C.h>     // DiSPLAY
 #include "Adafruit_LEDBackpack.h" // LED BAR
 #include <Servo.h>                // ENGINE
@@ -92,6 +93,8 @@
 #define CAR_KILOMETRAGE_ID 33
 #define BMS_CURRENT_ID 34
 
+#define EEPROM_KILOMETRAGE_ADDRESS 0
+
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 Adafruit_24bargraph bar = Adafruit_24bargraph();
 Servo myservo;
@@ -107,6 +110,10 @@ volatile static bool interrupt = false;
 volatile static int ledState = HIGH;
 volatile static int lastButtonState = LOW;
 
+//EEPROM
+static int address_eeprom = EEPROM_KILOMETRAGE_ADDRESS ;
+
+
 //TO TEST WITHOUT READING
 //static int line_sent_counter = 0;
 //static int battery_counter = 0;
@@ -114,6 +121,25 @@ volatile static int lastButtonState = LOW;
 //static int kilometrage_counter = 0;
 
 
+
+//FUNCTIONS TO KEEP DATA IN MEMORY ( even if supply is turned off ) 
+//void write_int_to_eeprom( int address, int value) {
+//
+//  byte two = (value & 0xFF);
+//  byte one = ( (value >> 8) & 0xFF );
+//
+//  EEPROM.update(address,two);
+//  EEPROM.update(address+1, one); 
+//
+//}
+//int read_int_from_eeprom( int address) {
+//
+//  byte two = EEPROM.read(address);
+//  byte one = EEPROM.read(address+1);
+//
+//
+//  return ( (two << 0) & 0xFFFFFF ) + ( (one << 8 ) & 0xFFFFFF );
+//}
 
 
 int get_resource_id(char *data) { //returns the resource ID or 0 if no matches ( corrupted data )
@@ -590,7 +616,12 @@ int update_incoming_resource(char *data) {
     }
   } else if (!strcmp(CAR_KILOMETRAGE_KEY, pch)) {
     pch = strtok (NULL, "=.\n");
+
+    
     strcpy(resources_values[CAR_KILOMETRAGE_ID], pch);
+    //write_int_to_eeprom(EEPROM_KILOMETRAGE_ADDRESS, atoi(pch) );      //SAVES KILOMETRAGE ON ADDRESS OF EEPROM
+     
+    
     if (current_menu == MAIN_MENU) {
       lcd_print(MAIN_MENU, CAR_KILOMETRAGE_ID);
     }
@@ -616,9 +647,9 @@ int update_incoming_resource(char *data) {
 
 void button_interrupt() {
 
-Serial.println(" Botton ");
-interrupts();
-delay(50); // to avoid debounce 
+  //Serial.println(" Botton ");
+  interrupts();
+  delay(50); // to avoid debounce
   menu_toggle();
 }
 
@@ -670,7 +701,12 @@ void loop() {
     for (int i = 0; i < NUMBER_OF_RESOURCES; i++) {
       strcpy(resources_values[i], "___");
     }
-    lcd_print(2, 0);
+   // char auxiliar[8];
+   // sprintf(auxiliar,"%d",  read_int_from_eeprom(EEPROM_KILOMETRAGE_ADDRESS) );
+   // strcpy(resources_values[CAR_KILOMETRAGE_ID], auxiliar);
+    lcd_print(MAIN_MENU, 0);
+    Serial.println(resources_values[CAR_KILOMETRAGE_ID]);
+    delay(3000);
     first_turn_on = false;
   }
 
@@ -686,7 +722,7 @@ void loop() {
   }
   if (buffer_read[s - 1] == '\n') {
     buffer_read[s] = '\0';
-    Serial.print(buffer_read);
+   // Serial.print(buffer_read);
     update_incoming_resource(buffer_read);
 
 
