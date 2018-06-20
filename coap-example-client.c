@@ -54,7 +54,7 @@
 #include "dev/serial-line.h"
 #include <stdint.h>
 
-#define DEBUG 1
+#define DEBUG 0
 #if DEBUG
 #define PRINTF(...) printf(__VA_ARGS__)
 #else
@@ -66,10 +66,10 @@
 #define LOG_MODULE "client"
 #define LOG_LEVEL  LOG_LEVEL_COAP
 
-
+#define CLOCK_MILISECS 1000
 
 /* HARDCODED ADDRESS OF THE SERVER */
-#define SERVER_EP "coap://[fe80::212:4b00:430:53ef]"
+#define SERVER_EP  "coap://[fe80::212:4b00:14b5:b5a2]"      // "coap://[fe80::212:4b00:14b5:b5a2]"
 
 //RESOURCES TO OBSERVE (THROUGH SUSCRIPTION)
 #define OBS_RESOURCE_URI_1 "Car_Speed"
@@ -84,8 +84,10 @@
 
 #define GET_RESOURCE_URI_1 "Car_Cells"
 
-//TIMER IN SECONDS IN BETWEEN REQUESTS OF DIFFERENT RESOURCES
-#define TOGGLE_INTERVAL 10
+
+//#define TOGGLE_INTERVAL 10
+#define TOGGLE_INTERVAL 1
+
 /* Example URIs that can be queried. */
 #define NUMBER_OF_URLS 10
 
@@ -117,6 +119,14 @@ static char last_temp_four_data[MAX_RESOURCE_FORMAT_SIZE];
 static char last_pwm_ec_data[MAX_RESOURCE_FORMAT_SIZE];
 static char last_pwm_bc_data[MAX_RESOURCE_FORMAT_SIZE];
 static short int last_cells_data[NUMBER_OF_CELLS];
+//static char last_cells_datas [NUMBER_OF_CELLS][12];
+
+static bool flags_obs[9];
+static bool not_all_resources_observed_yet=true;
+static bool waiting_for_callback=false;
+static short int timer_counter=0;
+static long int start_requests_counter=0;
+//static short int obser_count;
 
 //DECLARE THE URLs YOU WILL REQUEST (DON'T INCLUDE THE OBSERVED ONES)
 char *service_urls[NUMBER_OF_URLS+1] =
@@ -125,9 +135,28 @@ static int uri_switch = 5;  //The one with GET ( timer )
 
 
 
+//FUNCTION TO SEND THROUGH UART
+unsigned int
+uart1_send_bytes(const unsigned char *s, unsigned int len)
+{
+  unsigned int i = 0;
+
+  while(s && *s != 0) {
+    if(i >= len) {
+      break;
+    }
+    uart_write_byte(1, *s++);
+    i++;
+  }
+  return i;
+}
+
+
+
 //STORE THE VALUE AND/OR FORWARD IT TO THE DISPLAY HANDLER
 int handle_observed_resource(const uint8_t *data_payload,const char *uri){
 
+//char auxi[15];
 			if(!(strcmp(uri,OBS_RESOURCE_URI_1))){
 				strcpy(last_speed_data,(char *)data_payload);
 			}else if(!(strcmp(uri,OBS_RESOURCE_URI_2))){
@@ -146,13 +175,11 @@ int handle_observed_resource(const uint8_t *data_payload,const char *uri){
 				strcpy(last_pwm_ec_data,(char *)data_payload);
 			}else if(!(strcmp(uri,OBS_RESOURCE_URI_9))){
 				strcpy(last_pwm_bc_data,(char *)data_payload);
-			}else if(!(strcmp(service_urls[uri_switch],GET_RESOURCE_URI_1))){  //TODO why can't use URI? ? uri=NULL; because piggybagged?
+			}else {}
 
-				memcpy(last_cells_data,data_payload,NUMBER_OF_CELLS*2);
-			}
-
-
-
+			strcat((char *)data_payload,"\n");
+			uart1_send_bytes(data_payload, strlen((char*)data_payload));
+			printf(" ENVIO : %s" ,data_payload );
 	 return 0;
 
 }
@@ -164,8 +191,11 @@ static void
 notification_callback(coap_observee_t *obs, void *notification,
                       coap_notification_flag_t flag)
 {
+
   int len = 0;
   const uint8_t *payload = NULL;
+
+  waiting_for_callback=false;
 
   printf("Notification handler\n");
   printf("Observee URI: %s\n", obs->url);
@@ -181,6 +211,36 @@ notification_callback(coap_observee_t *obs, void *notification,
   case OBSERVE_OK: /* server accepeted observation request */
     printf("OBSERVE_OK: %*s\n", len, (char *)payload);
    // store_integer_value(payload);   //stores the new resource also the first time it suscribes
+   if(not_all_resources_observed_yet){
+			if(!strcmp(obs->url,OBS_RESOURCE_URI_1) ){
+				flags_obs[0]=true;
+				counter=1;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_2)){
+				flags_obs[1]=true;
+				counter=2;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_3)){
+				flags_obs[2]=true;
+				counter=3;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_4)){
+				flags_obs[3]=true;
+				counter=4;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_5)){
+				flags_obs[4]=true;
+				counter=5;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_6)){
+				flags_obs[5]=true;
+				counter=6;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_7)){
+				flags_obs[6]=true;
+				counter=7;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_8)){
+				flags_obs[7]=true;
+				counter=8;
+			}else if(!strcmp(obs->url,OBS_RESOURCE_URI_9)){
+				flags_obs[8]=true;
+				counter=0;
+			}
+   }
     handle_observed_resource(payload,obs->url);
     break;
   case OBSERVE_NOT_SUPPORTED:
@@ -198,45 +258,58 @@ notification_callback(coap_observee_t *obs, void *notification,
     obs = NULL;
     break;
   }
+
+  if(obs==NULL){
+	  printf("Error \n");
+	  counter++;
+	  if(counter>=9){
+		  counter=0;
+	  }
+  }
+
 }
 //////////////////////////
 //MAKES A NEW OBSERVE REQUEST OR STOPs THE CURRENT ONE
 void
 toggle_observation(coap_endpoint_t server_ep)   //FIXME: very bad coded
 {
-	if(counter==0){
+	waiting_for_callback=true;
+
+	if(counter==0 && not_all_resources_observed_yet){
 
     printf("Starting observation\n");
+
     obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_1, notification_callback, NULL);
-	}else if(counter==1){
+
+	}else if(counter==1 && not_all_resources_observed_yet){
 		printf("Starting observation\n");
 		obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_2, notification_callback, NULL);
-  } else if(counter==2){
+  } else if(counter==2 && not_all_resources_observed_yet){
     printf("Starting observation\n");
     obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_3, notification_callback, NULL);
-  } else if(counter==3){
+  } else if(counter==3 && not_all_resources_observed_yet){
       printf("Starting observation\n");
       obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_4, notification_callback, NULL);
-  } else if(counter==4){
+  } else if(counter==4 && not_all_resources_observed_yet){
       printf("Starting observation\n");
       obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_5, notification_callback, NULL);
-  } else if(counter==5){
+  } else if(counter==5 && not_all_resources_observed_yet){
       printf("Starting observation\n");
       obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_6, notification_callback, NULL);
-  }else if(counter==6){
+  }else if(counter==6 && not_all_resources_observed_yet){
       printf("Starting observation\n");
       obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_7, notification_callback, NULL);
-  }else if(counter==7){
+  }else if(counter==7 && not_all_resources_observed_yet){
       printf("Starting observation\n");
       obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_8, notification_callback, NULL);
-  }else if(counter==8){
+  }else if(counter==8 && not_all_resources_observed_yet){
       printf("Starting observation\n");
       obs = coap_obs_request_registration(&server_ep, OBS_RESOURCE_URI_9, notification_callback, NULL);
   }
-	counter++;
-	if (counter==9){
-	counter=0;
-	}
+//	counter++;
+//	if (counter==9){
+//	counter=0;
+//	}
 
 }
 
@@ -244,20 +317,55 @@ toggle_observation(coap_endpoint_t server_ep)   //FIXME: very bad coded
 
 /* This function will be passed to COAP_BLOCKING_REQUEST() to handle responses. */
 void
-client_chunk_handler(coap_message_t *response)
+client_chunk_handler(coap_message_t *response)   //HANDLES GET REQUESTS ( callback)
 {
-	int aux=0;
-	float testing=0;
+
+	char aux_string[12];
+	short int *aux_pointer;
+	short int aux_si;
+	char aux_spr[10];
+
+
+	//int aux=0;
+	//float testing=0;
 	//char *pch;
   const uint8_t *chunk;
-  // int len =  coap_get_payload(response, &chunk);
+   int len =  coap_get_payload(response, &chunk);
  coap_get_payload(response, &chunk);
   //printf("|%.*s\n", len, (char *)chunk);
+ printf("Resource length : %d \n",len );
 
 
   //store_integer_value(chunk); //careful!, it changes chunk  (TODO: fix it or make sure you don't need chunk anymore)
-  handle_observed_resource(chunk, response->uri_path);
+ // handle_observed_resource(chunk, response->uri_path);
+
+		//last_cells_datas
+	    //change format for the cells.
+
+
+		for(int i=0;i<24;i++){
+			aux_pointer=(short int*)chunk+i;
+
+			aux_si=*aux_pointer;
+
+			strcpy(aux_string, "cs=");
+			sprintf(aux_spr,"%d",aux_si/1000);
+			strcat(aux_string, aux_spr );
+			strcat(aux_string,".");
+			sprintf(aux_spr,"%d",  aux_si - ( (aux_si/1000)*1000)  );
+			strcat(aux_string, aux_spr );
+			strcat(aux_string,"\n");
+			printf(" ENVIO :  %s  \n" , aux_string );
+			uart1_send_bytes((uint8_t*)aux_string, strlen((char*)aux_string));
+		}
+
+
+			memcpy(last_cells_data,chunk,48);  //TODO: save as char each cell intead of processing before sending .
+
+
+
 				clrscr();
+
 
   	  	  	  	PRINTF("\nLast Speed Value %s \n", last_speed_data);
               	PRINTF("\nLast Kilometrage Value %s \n", last_kilometrage_data);
@@ -267,12 +375,12 @@ client_chunk_handler(coap_message_t *response)
               	PRINTF("\nLast Temp :  %s  %s  %s  %s \n", last_temp_one_data, last_temp_two_data, last_temp_three_data,last_temp_four_data);
               	PRINTF("Cells: ");
               	//Print like this not to store a Float valiable.
-              	for (int i=0 ; i<24; i++){
-              		aux= last_cells_data[i]-((last_cells_data[i]/1000)*1000);
-              		testing=last_cells_data[i]/100.0;
-              	PRINTF("c%d=%d.%d %f , ", last_cells_data[i]/1000, aux/100 , aux-(aux/100)*100 , testing);
-              	}
-              	PRINTF(" \n\n ");
+              	//for (int i=0 ; i<24; i++){
+              		//aux= last_cells_data[i]-((last_cells_data[i]/1000)*1000);
+              		//testing=last_cells_data[i]/100.0;
+              //	PRINTF("c%d=%d.%d %f , ", last_cells_data[i]/1000, aux/100 , aux-(aux/100)*100 , testing);
+              //	}
+              //	PRINTF(" \n\n ");
 
 }
 
@@ -281,6 +389,7 @@ PROCESS_THREAD(er_example_client, ev, data)
 {
   static coap_endpoint_t server_ep;
   PROCESS_BEGIN();
+  uart_set_input(1, serial_line_input_byte);
 
   static coap_message_t request[1];      /* This way the packet can be treated as pointer as usual. */
   coap_endpoint_parse(SERVER_EP, strlen(SERVER_EP), &server_ep);
@@ -291,8 +400,13 @@ PROCESS_THREAD(er_example_client, ev, data)
 
   NETSTACK_MAC.on();//
 
+  etimer_set(&et, 1 *  100);
+  //etimer_set(&et, TOGGLE_INTERVAL * CLOCK_SECOND);
 
-  etimer_set(&et, TOGGLE_INTERVAL * CLOCK_SECOND);
+//INITIALIZE WITH NO OBSERVED RESOURCES YET
+  for(int i=0;i<9;i++){
+	  flags_obs[i]=false;
+  }
 
 //ACTIVATE BUTTON TO MAKE OBSERVE REQUEST -
 #if PLATFORM_HAS_BUTTON
@@ -302,7 +416,7 @@ PROCESS_THREAD(er_example_client, ev, data)
   printf("Press a button to start/stop observation of remote resource\n");
 #endif /* PLATFORM_HAS_BUTTON */
 
-counter=0; // Initialize counter for new observed resource
+//counter=0; // Initialize counter for new observed resource
   while(1) {
 
 
@@ -322,27 +436,78 @@ counter=0; // Initialize counter for new observed resource
    			}
    		#endif /* end platform_has_button*/
 
-   	 //(EVENT TIMER - REQUEST NEXT RESOURCE)
-    	if(etimer_expired(&et)) {
+   			if(start_requests_counter<40){
+   							//Skip
+   			}else{
 
-    		/* PREPARES THE REQUEST */
-    		coap_init_message(request, COAP_TYPE_CON, COAP_GET, 0);
-    		coap_set_header_uri_path(request, service_urls[uri_switch]);
 
-    		printf("--Requesting %s--\n", service_urls[uri_switch]);
 
-    		/* MAKES A BLOCKING REQUEST */
-    		COAP_BLOCKING_REQUEST(&server_ep, request,client_chunk_handler); //then answer is piggybagged (?)
-    		printf("\n--Done--\n");
-    		//SWITCHs TO NEXT GET RESOURCE
-    		uri_switch = 5;  // loop if there are more than one GET resource
-    		etimer_reset(&et);
-    	}
-    //#endif /* PLATFORM_HAS_BUTTON */
+
+
+				int aux_count=0;   //CHECK IF ALL RESOURCES ACTIVE
+   			    for (int i=0;i<9;i++){
+   			    	if(flags_obs[i]){
+   			    		printf(" %d ",flags_obs[i]);
+
+   			    		aux_count++;
+   			    	}
+   			    }
+
+
+   			    if(aux_count==9){
+   			    	not_all_resources_observed_yet=false;
+   			    }else{
+   			    	printf("AUXCOUNT: ");printf("%d",aux_count);
+   			    }
+
+   				if(not_all_resources_observed_yet && !waiting_for_callback){    // IF NOT, REQUEST THE NEXT ONE.
+   							toggle_observation(server_ep);
+   				}
+
+
 
    			}
 
-  PROCESS_END();
+
+
+   	 //(EVENT TIMER - REQUEST GET - PERIODIC RESOURCES)
+    	if(etimer_expired(&et)) {
+
+    		if(start_requests_counter<40){// HARDCODE TO WAIT FOR CONNECTION ( make first request after X sec )
+    			start_requests_counter++;
+    		}else{
+
+				timer_counter++;
+				if(timer_counter>=30 && !not_all_resources_observed_yet){
+
+
+						/* PREPARES THE REQUEST */
+						coap_init_message(request, COAP_TYPE_CON, COAP_GET, 0);
+						coap_set_header_uri_path(request, service_urls[uri_switch]);
+
+						printf("--Requesting %s--\n", service_urls[uri_switch]);
+
+						/* MAKES A BLOCKING REQUEST */
+						COAP_BLOCKING_REQUEST(&server_ep, request,client_chunk_handler); //then answer is piggybagged (?)
+						printf("\n--Done--\n");
+						//SWITCHs TO NEXT GET RESOURCE
+						uri_switch = 5;  // loop if there are more than one GET resource
+						timer_counter=0;
+
+
+
+				}else{}
+    		}
+    		etimer_reset(&et);
+		}
+
+    //#endif /* PLATFORM_HAS_BUTTON */
+
+   }
+
+
+
+   			PROCESS_END();
 }
 
 
